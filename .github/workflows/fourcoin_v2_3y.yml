@@ -1,0 +1,130 @@
+name: FourCoin V2 three-year research
+on:
+  push:
+    branches: [research-fourcoin-v2-3y-20260917]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Python dependencies
+        run: python -m pip install pandas numpy requests
+      - name: Binance four-coin research
+        shell: bash
+        run: |
+          cat > /tmp/research.py <<'PY'
+          import io,zipfile,json,time,math,collections,concurrent.futures,os
+          import requests,pandas as pd,numpy as np
+          from pathlib import Path
+          P={'BTC':(40,7,14,4.,1.5,.5,6,.01,.001,.001),'ETH':(20,10,10,9.,2.25,.25,5,.01,.001,.001),'XRP':(30,10,14,5.,2.25,.5,3,.01,1.,1.),'SOL':(90,7,20,6.,2.5,.5,5,.015,.01,.01)}
+          START=pd.Timestamp('2023-09-16',tz='UTC');END=pd.Timestamp('2026-09-16',tz='UTC');FEE=.0005;SLIP=.0002;CAP=3.;LEV=4.;MIN_NOT=50.
+          symbols=[c+q for q in ('USDT','USDC') for c in P]
+          Path('results').mkdir(exist_ok=True)
+          def fetch(t):
+              symbol,typ,day=t
+              u=f'https://data.binance.vision/data/futures/um/{typ}/klines/{symbol}/1h/{symbol}-1h-{day}.zip'
+              err=''
+              for attempt in range(3):
+                  try:
+                      r=requests.get(u,timeout=30)
+                      if r.status_code==404:return t,None,'NOT_LISTED'
+                      r.raise_for_status()
+                      z=zipfile.ZipFile(io.BytesIO(r.content));fn=next(x for x in z.namelist() if x.endswith('.csv'))
+                      df=pd.read_csv(z.open(fn),header=None,usecols=[0,1,2,3,4],dtype=str);df.columns=['t','o','h','l','c'];df=df[pd.to_numeric(df.t,errors='coerce').notna()].copy()
+                      for c in df:df[c]=pd.to_numeric(df[c],errors='coerce')
+                      df.t=df.t.apply(lambda x:x/1000 if x>1e15 else x)
+                      df.t=pd.to_datetime(df.t,unit='ms',utc=True)
+                      return t,df.dropna().set_index('t'),''
+                  except Exception as e:err=str(e);time.sleep(1+attempt)
+              return t,None,err
+          tasks=[]
+          for symbol in symbols:
+              y,m=2023,1
+              while (y,m)<=(2026,8):
+                  tasks.append((symbol,'monthly',f'{y:04d}-{m:02d}'));m+=1
+                  if m==13:y,m=y+1,1
+              for d in range(1,16):tasks.append((symbol,'daily',f'2026-09-{d:02d}'))
+          pieces=collections.defaultdict(list); missing=collections.defaultdict(list); errors=collections.defaultdict(list)
+          print('Downloading',len(tasks),'archives',flush=True)
+          with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+              for t,df,status in ex.map(fetch,tasks):
+                  if df is not None:pieces[t[0]].append(df)
+                  elif status=='NOT_LISTED':missing[t[0]].append(t[2])
+                  else:errors[t[0]].append(t[2]+':'+status)
+          results=[];failed=[]
+          for symbol in symbols:
+              if errors[symbol]:
+                  failed.append({'symbol':symbol,'error':'ARCHIVE_DOWNLOAD_FAILED','details':errors[symbol][:5]});continue
+              if not pieces[symbol]:failed.append({'symbol':symbol,'error':'NO_PRICE_DATA'});continue
+              x=pd.concat(pieces[symbol]).sort_index();x=x[~x.index.duplicated(keep='last')];x=x[(x.index>=pd.Timestamp('2023-01-01',tz='UTC'))&(x.index<END)]
+              gaps=int((x.index.to_series().diff()>pd.Timedelta(hours=1)).sum())
+              if gaps:failed.append({'symbol':symbol,'error':'INTERNAL_MISSING_HOURS','gaps':gaps});continue
+              coin=symbol[:-4];en,ex,nlen,maxnp,stopn,addn,maxu,risk,step,minq=P[coin]
+              d=x.resample('1D').agg({'o':'first','h':'max','l':'min','c':'last'});counts=x.c.resample('1D').count();d=d[counts==24];prev=d.c.shift(1)
+              tr=pd.concat([d.h-d.l,(d.h-prev).abs(),(d.l-prev).abs()],axis=1).max(axis=1)
+              ns=pd.Series(np.nan,index=d.index)
+              if len(d)>=nlen:
+                  last=tr.iloc[:nlen].mean();ns.iloc[nlen-1]=last
+                  for k in range(nlen,len(d)):last=(last*(nlen-1)+tr.iloc[k])/nlen;ns.iloc[k]=last
+              ema=d.c.ewm(span=50,adjust=False).mean()
+              ind=pd.DataFrame({'eh':d.h.rolling(en).max().shift(1),'el':d.l.rolling(en).min().shift(1),'xh':d.h.rolling(ex).max().shift(1),'xl':d.l.rolling(ex).min().shift(1),'n':ns.shift(1),'prev':prev,'ema':ema.shift(1),'old':ema.shift(11)})
+              ind['npct']=100*ind.n/ind.prev;ind['shortOK']=(ind.prev<ind.ema)&(ind.ema<ind.old)
+              x=x.join(ind,on=x.index.floor('D'))
+              cash=1000.;peak=1000.;side=0;qty=0.;avg=0.;unit=0.;lastfill=0.;entryn=0.;stop=0.;fees=0.;units=0;closed=[];fills=[];path=[];rejected=0;maxgross=0.;maxmargin=0.;maxgt='';maxgu=0;maxgq=0.;maxutil=0.;maxut='';maxdd=0.;maxddt='';entertime=''
+              for bar in x.itertuples():
+                  t=bar.Index
+                  if t<START:continue
+                  price=float(bar.c);evt='';exited=False
+                  if side:
+                      sh=price<=stop if side>0 else price>=stop
+                      ch=price<=bar.xl if side>0 else price>=bar.xh
+                      if sh or ch:
+                          fp=price*(1-side*SLIP);fee=qty*fp*FEE;pnl=side*qty*(fp-avg)-fee-fees
+                          cash+=side*qty*(fp-avg)-fee
+                          closed.append({'entry':entertime,'exit':str(t),'side':side,'units':units,'qty':qty,'exit_price':fp,'reason':'STOP' if sh else 'CHANNEL','net_pnl':pnl})
+                          fills.append({'time':str(t),'kind':'STOP_CLOSE' if sh else 'CHANNEL_CLOSE','qty':qty,'side':side});evt='EXIT';exited=True
+                          side=0;qty=avg=unit=lastfill=entryn=stop=fees=0.;units=0
+                  if side and not exited and units<maxu:
+                      trigger=lastfill+side*addn*entryn
+                      if (price>=trigger if side>0 else price<=trigger):
+                          equity=cash+side*qty*(price-avg); room=max(0.,(equity*CAP-qty*price)/(1+CAP*FEE));fp=price*(1+side*SLIP);addq=unit
+                          if addq>=minq and addq*fp>=MIN_NOT and addq*fp<=room and equity>0:
+                              fee=addq*fp*FEE;cash-=fee;fees+=fee;avg=(avg*qty+fp*addq)/(qty+addq);qty+=addq;lastfill=fp;units+=1;stop=lastfill-side*stopn*entryn
+                              fills.append({'time':str(t),'kind':'ADD','qty':addq,'side':side});evt='ADD'
+                          else:rejected+=1
+                  if not side and not exited and pd.notna(bar.n) and bar.n>0 and pd.notna(bar.eh) and pd.notna(bar.el) and pd.notna(bar.npct) and bar.npct<=maxnp:
+                      lh=price>bar.eh;short=price<bar.el and bar.shortOK
+                      if lh!=short:
+                          direction=1 if lh else -1;fp=price*(1+direction*SLIP);want=cash*risk/bar.n;cap=max(0.,cash*CAP/(fp*(1+CAP*FEE)));q=math.floor(min(want,cap)/step+1e-10)*step
+                          if q>=minq and q*fp>=MIN_NOT and cash>0:
+                              fee=q*fp*FEE;cash-=fee;fees=fee;side=direction;qty=avg*0+q;avg=fp;unit=q;lastfill=fp;entryn=bar.n;stop=fp-direction*stopn*bar.n;units=1;entertime=str(t)
+                              fills.append({'time':str(t),'kind':'LONG_ENTRY' if direction>0 else 'SHORT_ENTRY','qty':q,'side':side});evt='ENTRY'
+                          else:rejected+=1
+                  equity=cash+(side*qty*(price-avg) if side else 0.);gross=qty*price;margin=gross/LEV;util=100*margin/equity if equity>0 else float('inf')
+                  if gross>maxgross:maxgross=gross;maxmargin=margin;maxgt=str(t);maxgu=units;maxgq=qty
+                  if util>maxutil:maxutil=util;maxut=str(t)
+                  peak=max(peak,equity);dd=100*(peak-equity)/peak
+                  if dd>maxdd:maxdd=dd;maxddt=str(t)
+                  path.append({'time':str(t),'equity':equity,'gross':gross,'initial_margin':margin,'margin_util_pct':util,'drawdown_pct':dd,'units':units,'qty':qty,'event':evt})
+              if not path:failed.append({'symbol':symbol,'error':'NO_TEST_BARS'});continue
+              frame=pd.DataFrame(path);frame.to_csv(f'results/{symbol}_path.csv',index=False);pd.DataFrame(closed).to_csv(f'results/{symbol}_trades.csv',index=False);pd.DataFrame(fills).to_csv(f'results/{symbol}_fills.csv',index=False)
+              final=frame.equity.iloc[-1];years=(pd.Timestamp(frame.time.iloc[-1])-pd.Timestamp(frame.time.iloc[0])).total_seconds()/31557600.;pnl=[r['net_pnl'] for r in closed];wins=[v for v in pnl if v>0];losses=[v for v in pnl if v<0]
+              row={'symbol':symbol,'requested_start':str(START),'end_exclusive':str(END),'first_data':str(x.index[0]),'first_test_bar':frame.time.iloc[0],'last_test_bar':frame.time.iloc[-1],'data_months_not_available':missing[symbol],'start_equity':1000,'final_equity':final,'return_pct':100*(final/1000-1),'cagr_pct':100*((final/1000)**(1/years)-1) if final>0 else None,'mdd_pct':maxdd,'mdd_time':maxddt,'closed_trades':len(closed),'wins':len(wins),'losses':len(losses),'win_pct':100*len(wins)/len(closed) if closed else 0,'pf':sum(wins)/-sum(losses) if losses else None,'max_gross_notional':maxgross,'max_initial_margin_4x':maxmargin,'max_gross_time':maxgt,'max_gross_units':maxgu,'max_gross_qty':maxgq,'max_initial_margin_util_pct':maxutil,'max_margin_util_time':maxut,'rejected_orders':rejected,'fill_events':len(fills),'end_open_units':units,'end_open_qty':qty,'unrealized_pnl':side*qty*(float(x.c.iloc[-1])-avg) if side else 0}
+              results.append(row);print('RESULT',json.dumps(row,default=str),flush=True)
+              frame.assign(month=pd.to_datetime(frame.time).dt.strftime('%Y-%m')).groupby('month').equity.last().to_csv(f'results/{symbol}_monthly.csv')
+          pd.DataFrame(results).to_csv('results/summary.csv',index=False)
+          Path('results/summary.json').write_text(json.dumps({'method':'V2 theoretical immediate hourly-close fills. Fee 0.05% per side; adverse slip 0.02%; funding excluded; Binance GTC actual fill behavior NOT modeled. No shared wallet. Per-symbol independent 1000 quote currency.','results':results,'failed':failed},indent=2,default=str))
+          print('FINAL_REPORT',Path('results/summary.json').read_text(),flush=True)
+          if failed:raise SystemExit(2)
+          PY
+          python /tmp/research.py
+      - name: Upload raw backtest files
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fourcoin-v2-3y-backtest
+          path: results/
+          if-no-files-found: warn
