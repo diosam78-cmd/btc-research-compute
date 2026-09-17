@@ -1,0 +1,41 @@
+name: Turtle Pullback Stage 3B OOS
+
+on:
+  push:
+    branches:
+      - research-turtle-stage3-oos-20260917
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install pandas numpy requests tabulate
+
+      - name: Fetch audited Stage 1 core
+        run: |
+          mkdir -p research
+          curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage1_core.py
+
+      - name: Run Stage 3B OOS suite
+        run: python research/pullback_stage3_oos.py
+
+      - name: Upload Stage 3B OOS results
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-pullback-stage3b-oos-results
+          path: results_pullback_stage3_oos/
+          if-no-files-found: error
