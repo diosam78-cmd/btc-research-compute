@@ -1,0 +1,67 @@
+name: Turtle Hybrid Entry Research
+on:
+  push:
+    branches:
+      - research-turtle-hybrid-entry-20260917
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install pandas numpy requests tabulate
+      - name: Prepare source and enforce baseline invariance
+        run: |
+          cp research/pullback_stage1.py research/pullback_hybrid.py
+          python research/prepare_hybrid.py
+          python -m py_compile research/pullback_hybrid.py
+      - name: Run four-coin three-year screen
+        run: python research/pullback_hybrid.py
+      - name: Validate baseline and build report
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import pandas as pd
+          import json
+          p=Path('results_hybrid_entry')
+          s=pd.read_csv(p/'summary.csv');a=pd.read_csv(p/'aggregate_comparison.csv')
+          assert len(s)==24, ('rows',len(s))
+          baseline={'BTCUSDT':6122.754677747175,'ETHUSDT':4597.402574464877,'XRPUSDT':4351.11886708665,'SOLUSDT':10172.706264838069}
+          for sym,v in baseline.items():
+              got=float(s[(s.symbol==sym)&(s.variant=='BASE')].iloc[0].final_equity)
+              assert abs(got-v)<.01,(sym,got,v)
+          assert len(a)==6
+          assert s[['final_equity','mdd_pct','cagr_pct','calmar']].notna().all().all()
+          # The pending remainder is never automatically treated as filled.
+          assert (s.hybrid_filled+s.hybrid_cancel+s.hybrid_expired<=s.hybrid_armed).all()
+          comps=s[['symbol','variant','final_equity','return_pct','cagr_pct','mdd_pct','calmar','pf','closed_trades','hybrid_armed','hybrid_filled','hybrid_cancel','hybrid_expired','hybrid_fallback','hybrid_blocked_add_bars']]
+          report=['# Hybrid entry screen (exploratory; no live parameter change)','',
+              'Four USDT perpetuals; 2023-09-16 to 2026-09-16 UTC, one-hour close signal & execution.',
+              'First tranche immediately at breakout close; second tranche after 0.25N/0.50N pullback from favorable CLOSE extreme; 24h/72h timeout.',
+              'Candidate H75: 75% immediately, 25% remainder at 0.25N, 24h expiry.',
+              'If either split lot fails min quantity/notional, fall back to 100% immediate baseline entry and count it.',
+              'Pending balance cancels on breakout-level breach or exit; while pending, ADD blocked. Initial fill sets stop/add reference; remainder does not loosen stop or reset trigger.',
+              'FEE 0.05%/side, adverse SLIP 0.02%/fill, cap 3x, Binance model 4x. Funding, intrabar paths and liquidation excluded.',
+              'All hybrid variants retain normal initial full unit size for later ADD orders, even if remainder expires; risk exposure can differ.',
+              'A split second tranche is a separate MARKET fill when its hourly-close condition triggers, not a resting limit order.',
+              '', '## Four independent wallets combined','',a.to_markdown(index=False),
+              '', '## Per coin','',comps.to_markdown(index=False),
+              '', 'Caution: in-sample screening only; candidate must pass out-of-sample, spread/slippage sensitivity and margin safety before live use.']
+          (p/'HYBRID_REPORT.md').write_text('\n'.join(report),encoding='utf-8')
+          print('VALIDATION PASSED: 24 rows, 4 BASE equities match Stage 1, 6 variants and pending reconciliation')
+          print('AGGREGATE\n',a.to_string(index=False))
+          print('PER_SYMBOL\n',comps.to_string(index=False))
+          PY
+      - name: Upload hybrid research
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-hybrid-entry-results
+          path: results_hybrid_entry/
+          if-no-files-found: error
