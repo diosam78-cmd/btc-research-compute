@@ -30,8 +30,84 @@ jobs:
           mkdir -p research
           curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage1_core.py
 
-      - name: Run Stage 3B OOS suite
-        run: python research/pullback_stage3_oos.py
+      - name: Run Stage 3B OOS suite with daily gap repair
+        run: |
+          python - <<'PY'
+          import importlib.util
+          import collections
+          import concurrent.futures
+          import pandas as pd
+
+          spec = importlib.util.spec_from_file_location('oos', 'research/pullback_stage3_oos.py')
+          m = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(m)
+
+          def fetch_many(tasks, pieces, errors):
+              with concurrent.futures.ThreadPoolExecutor(max_workers=16) as ex:
+                  for task, df, status in ex.map(m.core.fetch_archive, tasks):
+                      sym = task[0]
+                      if df is not None:
+                          pieces[sym].append(df)
+                      elif status != 'NOT_LISTED':
+                          errors[sym].append(task[2] + ':' + status)
+
+          def fixed_load_oos_data():
+              tasks = []
+              for symbol in m.SYMBOLS:
+                  for y, mon in m.month_iter(2020, 1, 2023, 8):
+                      tasks.append((symbol, 'monthly', f'{y:04d}-{mon:02d}'))
+                  for d in range(1, 17):
+                      tasks.append((symbol, 'daily', f'2023-09-{d:02d}'))
+
+              pieces = collections.defaultdict(list)
+              errors = collections.defaultdict(list)
+              print(f'Downloading {len(tasks)} OOS Binance archives', flush=True)
+              fetch_many(tasks, pieces, errors)
+
+              # Some old monthly Binance Vision archives omit a few boundary days.
+              # Detect internal hourly gaps and refill only those dates from daily archives.
+              repair_tasks = []
+              for symbol in m.SYMBOLS:
+                  if not pieces[symbol]:
+                      continue
+                  x = pd.concat(pieces[symbol]).sort_index()
+                  x = x[~x.index.duplicated(keep='last')]
+                  x = x[(x.index >= m.WARMUP_START) & (x.index < m.OOS_END)]
+                  idx = x.index
+                  for i in range(1, len(idx)):
+                      if idx[i] - idx[i-1] > pd.Timedelta(hours=1):
+                          first_missing = idx[i-1] + pd.Timedelta(hours=1)
+                          last_missing = idx[i] - pd.Timedelta(hours=1)
+                          for day in pd.date_range(first_missing.floor('D'), last_missing.floor('D'), freq='D', tz='UTC'):
+                              repair_tasks.append((symbol, 'daily', day.strftime('%Y-%m-%d')))
+
+              repair_tasks = list(dict.fromkeys(repair_tasks))
+              if repair_tasks:
+                  print(f'Repairing {len(repair_tasks)} daily archives for monthly gaps', flush=True)
+                  fetch_many(repair_tasks, pieces, errors)
+
+              out = {}
+              availability = []
+              for symbol in m.SYMBOLS:
+                  if errors[symbol]:
+                      raise RuntimeError(f'{symbol} archive errors: {errors[symbol][:5]}')
+                  if not pieces[symbol]:
+                      raise RuntimeError(f'{symbol}: no OOS data')
+                  x = pd.concat(pieces[symbol]).sort_index()
+                  x = x[~x.index.duplicated(keep='last')]
+                  x = x[(x.index >= m.WARMUP_START) & (x.index < m.OOS_END)]
+                  diffs = x.index.to_series().diff()
+                  bad = diffs[diffs > pd.Timedelta(hours=1)]
+                  if len(bad):
+                      raise RuntimeError(f'{symbol}: unresolved internal hourly gaps={len(bad)}, first={bad.head(5).to_dict()}')
+                  availability.append({'symbol': symbol, 'first_hour': str(x.index[0]), 'last_hour': str(x.index[-1]), 'rows': len(x)})
+                  out[symbol] = x
+              pd.DataFrame(availability).to_csv(m.OUT / 'data_availability.csv', index=False)
+              return out
+
+          m.load_oos_data = fixed_load_oos_data
+          m.main()
+          PY
 
       - name: Upload Stage 3B OOS results
         uses: actions/upload-artifact@v4
