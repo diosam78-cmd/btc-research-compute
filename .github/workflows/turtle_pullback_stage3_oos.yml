@@ -30,7 +30,7 @@ jobs:
           mkdir -p research
           curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage1_core.py
 
-      - name: Run Stage 3B OOS suite with daily gap repair
+      - name: Run Stage 3B OOS suite with daily gap repair and diagnostics
         run: |
           python - <<'PY'
           import importlib.util
@@ -64,8 +64,6 @@ jobs:
               print(f'Downloading {len(tasks)} OOS Binance archives', flush=True)
               fetch_many(tasks, pieces, errors)
 
-              # Some old monthly Binance Vision archives omit a few boundary days.
-              # Detect internal hourly gaps and refill only those dates from daily archives.
               repair_tasks = []
               for symbol in m.SYMBOLS:
                   if not pieces[symbol]:
@@ -105,8 +103,39 @@ jobs:
               pd.DataFrame(availability).to_csv(m.OUT / 'data_availability.csv', index=False)
               return out
 
-          m.load_oos_data = fixed_load_oos_data
+          raw = fixed_load_oos_data()
+          m.load_oos_data = lambda: raw
           m.main()
+
+          diag = []
+          for symbol in m.SYMBOLS:
+              p = m.core.PARAMS[symbol[:-4]]
+              x = m.core.add_indicators(raw[symbol], p)
+              y = x[(x.index >= m.OOS_START) & (x.index < m.OOS_END)].copy()
+              warm = y.n.notna() & y.eh.notna() & y.el.notna() & y.npct.notna()
+              long_break = warm & (y.c > y.eh)
+              short_break_raw = warm & (y.c < y.el)
+              short_break_filtered = short_break_raw & y.shortOK.fillna(False)
+              n_ok = warm & (y.npct <= p['nmax'])
+              eligible_long = long_break & n_ok
+              eligible_short = short_break_filtered & n_ok
+              diag.append({
+                  'symbol': symbol,
+                  'hours_in_oos': len(y),
+                  'warm_hours': int(warm.sum()),
+                  'raw_long_breakout_hours': int(long_break.sum()),
+                  'raw_short_breakout_hours': int(short_break_raw.sum()),
+                  'short_filter_pass_breakout_hours': int(short_break_filtered.sum()),
+                  'n_pct_limit': p['nmax'],
+                  'n_filter_pass_hours': int(n_ok.sum()),
+                  'eligible_long_entry_hours': int(eligible_long.sum()),
+                  'eligible_short_entry_hours': int(eligible_short.sum()),
+                  'min_n_pct_on_long_breakouts': float(y.loc[long_break, 'npct'].min()) if long_break.any() else None,
+                  'min_n_pct_on_short_filtered_breakouts': float(y.loc[short_break_filtered, 'npct'].min()) if short_break_filtered.any() else None,
+              })
+          d = pd.DataFrame(diag)
+          d.to_csv(m.OUT / 'oos_entry_filter_diagnostics.csv', index=False)
+          print('\nENTRY FILTER DIAGNOSTICS\n', d.to_string(index=False), flush=True)
           PY
 
       - name: Upload Stage 3B OOS results
