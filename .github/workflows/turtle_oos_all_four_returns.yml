@@ -25,8 +25,18 @@ jobs:
       - name: Pinned strategy baseline
         run: |
           curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage1_core.py
-      - name: Backtest exact OOS window and invariance check
-        run: python research/oos_btc_eth_complete.py
+      - name: Backtest exact OOS window with listing-aware warmup
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('research/oos_btc_eth_complete.py')
+          code=p.read_text(encoding='utf-8')
+          before="if x.index[0] > START-pd.Timedelta(days=200):"
+          after="if sym != 'SOLUSDT' and x.index[0] > START-pd.Timedelta(days=200):"
+          assert code.count(before)==1
+          p.write_text(code.replace(before,after),encoding='utf-8')
+          PY
+          python research/oos_btc_eth_complete.py
       - name: Upload results
         uses: actions/upload-artifact@v4
         with:
