@@ -1,0 +1,35 @@
+name: Turtle Stage 4 Partial Trailing Research
+
+on:
+  push:
+    branches:
+      - research-turtle-stage4-trailing-20260917
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: python -m pip install pandas numpy requests tabulate
+      - name: Fetch pinned Stage 1/2 baseline core
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage1_core.py
+      - name: Research and compare original baseline hourly equity and closed trade ledger
+        run: python research/trailing_stage4.py
+      - name: Upload Stage 4 reports and raw research data
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-stage4-trailing-results
+          path: results_turtle_stage4_trailing/
+          if-no-files-found: error
