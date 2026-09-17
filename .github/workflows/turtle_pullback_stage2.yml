@@ -1,0 +1,144 @@
+name: Turtle Pullback Stage 2 Fine Screen
+
+on:
+  push:
+    branches:
+      - research-turtle-pullback-stage2-small-20260917
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: python -m pip install pandas numpy requests
+
+      - name: Prepare Stage 2 engine from audited Stage 1
+        run: |
+          mkdir -p research
+          curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage2.py
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('research/pullback_stage2.py')
+          s=p.read_text()
+          a=s.index('VARIANTS = {')
+          b=s.index('\n}\n\nSTART', a)+3
+          new="""VARIANTS = {
+              'BASE': dict(entry_pb=None, add_pb=None),
+              'A10':  dict(entry_pb=None, add_pb=0.10),
+              'A15':  dict(entry_pb=None, add_pb=0.15),
+              'A20':  dict(entry_pb=None, add_pb=0.20),
+              'A25':  dict(entry_pb=None, add_pb=0.25),
+              'A30':  dict(entry_pb=None, add_pb=0.30),
+          }\n\n"""
+          s=s[:a]+new+s[b:]
+          s=s.replace("OUT = Path('results_pullback_stage1')", "OUT = Path('results_pullback_stage2')")
+          s=s.replace('Stage 1 intentionally changes only pullback timing. No partial entries yet.', 'Stage 2 fine screen: entry stays baseline; only ADD pullback is varied 0.10N~0.30N.')
+          p.write_text(s)
+          PY
+
+      - name: Run Stage 2 fine screen
+        run: python research/pullback_stage2.py
+
+      - name: Build robustness report
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          import numpy as np
+          import pandas as pd
+          out=Path('results_pullback_stage2')
+          s=pd.read_csv(out/'summary.csv')
+          comp=pd.read_csv(out/'per_symbol_comparison.csv')
+          agg=pd.read_csv(out/'aggregate_comparison.csv')
+          tr=pd.read_csv(out/'trades.csv')
+
+          # Top-3 winner dependence by symbol/variant.
+          deps=[]
+          for (sym,var),g in tr.groupby(['symbol','variant']):
+              pnl=g.net_pnl.astype(float)
+              net=pnl.sum()
+              top3=pnl[pnl>0].nlargest(3).sum()
+              deps.append({'symbol':sym,'variant':var,'net_pnl':net,'top3_wins':top3,
+                           'top3_net_profit_share_pct':(100*top3/net if net>0 else np.nan)})
+          dep=pd.DataFrame(deps)
+          dep.to_csv(out/'top3_winner_dependence.csv',index=False)
+
+          # Parse yearly returns and calculate simple dispersion / positive-year count.
+          yr=[]
+          for r in s.itertuples():
+              d=json.loads(r.year_returns_json)
+              vals=list(map(float,d.values()))
+              yr.append({'symbol':r.symbol,'variant':r.variant,
+                         'positive_year_segments':sum(v>0 for v in vals),
+                         'negative_year_segments':sum(v<0 for v in vals),
+                         'min_year_segment_pct':min(vals),
+                         'max_year_segment_pct':max(vals),
+                         'year_segment_std_pct':float(np.std(vals,ddof=0))})
+          yr=pd.DataFrame(yr)
+          yr.to_csv(out/'year_segment_robustness.csv',index=False)
+
+          # Cross-coin medians and counts. This is descriptive, not an optimization winner score.
+          rows=[]
+          base=s[s.variant=='BASE'].set_index('symbol')
+          for var,g in s.groupby('variant'):
+              d=dep[dep.variant==var].set_index('symbol')
+              y=yr[yr.variant==var].set_index('symbol')
+              cg=[]; md=[]; ca=[]; pf=[]; td=[]; pos=[]
+              for r in g.itertuples():
+                  b=base.loc[r.symbol]
+                  cg.append(r.cagr_pct-b.cagr_pct)
+                  md.append(r.mdd_pct-b.mdd_pct)
+                  ca.append(r.calmar-b.calmar)
+                  pf.append(r.pf-b.pf)
+                  td.append(d.loc[r.symbol,'top3_net_profit_share_pct'])
+                  pos.append(y.loc[r.symbol,'positive_year_segments'])
+              rows.append({'variant':var,
+                           'median_delta_cagr_pp':float(np.median(cg)),
+                           'median_delta_mdd_pp':float(np.median(md)),
+                           'median_delta_calmar':float(np.median(ca)),
+                           'median_delta_pf':float(np.median(pf)),
+                           'coins_cagr_better':int(sum(x>0 for x in cg)),
+                           'coins_mdd_lower':int(sum(x<0 for x in md)),
+                           'coins_calmar_better':int(sum(x>0 for x in ca)),
+                           'median_top3_profit_share_pct':float(np.nanmedian(td)),
+                           'median_positive_year_segments':float(np.median(pos)),
+                           'total_closed_trades':int(g.closed_trades.sum()),
+                           'total_add_arms':int(g.add_arms.sum()),
+                           'total_add_exec':int(g.add_exec.sum()),
+                           'total_add_cancel':int(g.add_cancel.sum())})
+          robust=pd.DataFrame(rows)
+          robust.to_csv(out/'robustness_summary.csv',index=False)
+
+          # Compact markdown report.
+          md=['# Turtle Pullback Stage 2 — Fine Add-Pullback Screen','',
+              '- Universe: BTCUSDT, ETHUSDT, XRPUSDT, SOLUSDT','- Period: 2023-09-16 to 2026-09-16 UTC',
+              '- Entry: unchanged baseline breakout','- Add trigger: unchanged baseline favorable N trigger; after trigger, wait for 0.10N~0.30N retracement from favorable close extreme',
+              '- Exit/stop/sizing/fees/slippage/exposure cap: unchanged from canonical baseline','',
+              '## Aggregate comparison','',agg.to_markdown(index=False),'','## Cross-coin robustness','',robust.to_markdown(index=False),'',
+              '## Per-symbol comparison','',comp[['symbol','variant','final_equity','cagr_pct','mdd_pct','calmar','pf','closed_trades','add_arms','add_exec','add_cancel','delta_cagr_pp','delta_mdd_pp','delta_calmar']].to_markdown(index=False),'',
+              '## Interpretation guardrail','',
+              'This stage is a parameter screen, not a declaration of a new live baseline. A candidate should advance only if improvement is not isolated to one coin/one year and does not materially increase big-winner dependence or drawdown.']
+          (out/'STAGE2_REPORT.md').write_text('\n'.join(md))
+          print(agg.to_string(index=False))
+          print('\nROBUSTNESS\n',robust.to_string(index=False))
+          PY
+
+      - name: Upload Stage 2 results
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-pullback-stage2-results
+          path: results_pullback_stage2/
+          if-no-files-found: error
