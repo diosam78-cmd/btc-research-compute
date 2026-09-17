@@ -1,0 +1,35 @@
+name: Turtle 2021-2023 OOS All Four Returns
+
+on:
+  push:
+    branches:
+      - research-turtle-oos-btc-eth-20260917
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Dependencies
+        run: python -m pip install pandas numpy requests tabulate
+      - name: Pinned strategy baseline
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/diosam78-cmd/btc-research-compute/research-turtle-pullback-stage1-20260917/research/pullback_stage1.py -o research/pullback_stage1_core.py
+      - name: Backtest exact OOS window and invariance check
+        run: python research/oos_btc_eth_complete.py
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-2021-2023-oos-all-four
+          path: results_oos_btc_eth/
+          if-no-files-found: error
