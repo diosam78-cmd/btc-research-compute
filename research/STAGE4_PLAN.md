@@ -1,0 +1,3 @@
+# Stage 4 candidate scope
+
+First entry: baseline 100% breakout, never hybrid. BTC/ETH: baseline adds. XRP: arm existing add threshold, wait 0.15N CLOSE retracement. SOL: 0.20N. These are user-selected research settings, NOT validated live replacements (XRP older OOS worsened; SOL older OOS had zero entries). Retain original V3.1 live script unchanged. Stage 4 screens partial-trailing exits against the mixed research baseline, with original stop/Donchian full exits prioritized; funding, intrabar path and exchange fill reconciliation excluded. Research results are not a live-trading approval.
