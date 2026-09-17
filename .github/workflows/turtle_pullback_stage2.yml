@@ -23,7 +23,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: python -m pip install pandas numpy requests
+        run: python -m pip install pandas numpy requests tabulate
 
       - name: Prepare Stage 2 engine from audited Stage 1
         run: |
@@ -65,7 +65,6 @@ jobs:
           agg=pd.read_csv(out/'aggregate_comparison.csv')
           tr=pd.read_csv(out/'trades.csv')
 
-          # Top-3 winner dependence by symbol/variant.
           deps=[]
           for (sym,var),g in tr.groupby(['symbol','variant']):
               pnl=g.net_pnl.astype(float)
@@ -76,7 +75,6 @@ jobs:
           dep=pd.DataFrame(deps)
           dep.to_csv(out/'top3_winner_dependence.csv',index=False)
 
-          # Parse yearly returns and calculate simple dispersion / positive-year count.
           yr=[]
           for r in s.itertuples():
               d=json.loads(r.year_returns_json)
@@ -90,7 +88,6 @@ jobs:
           yr=pd.DataFrame(yr)
           yr.to_csv(out/'year_segment_robustness.csv',index=False)
 
-          # Cross-coin medians and counts. This is descriptive, not an optimization winner score.
           rows=[]
           base=s[s.variant=='BASE'].set_index('symbol')
           for var,g in s.groupby('variant'):
@@ -122,7 +119,6 @@ jobs:
           robust=pd.DataFrame(rows)
           robust.to_csv(out/'robustness_summary.csv',index=False)
 
-          # Compact markdown report.
           md=['# Turtle Pullback Stage 2 — Fine Add-Pullback Screen','',
               '- Universe: BTCUSDT, ETHUSDT, XRPUSDT, SOLUSDT','- Period: 2023-09-16 to 2026-09-16 UTC',
               '- Entry: unchanged baseline breakout','- Add trigger: unchanged baseline favorable N trigger; after trigger, wait for 0.10N~0.30N retracement from favorable close extreme',
