@@ -23,14 +23,13 @@ jobs:
       - name: Install pandas numpy requests
         run: python -m pip install pandas numpy requests
       - name: Check Python syntax
-        run: python -m py_compile research/solusdc_500_target_period.py research/pullback_stage1.py
-      - name: Run exact period SOLUSDC original vs 0.20N
-        run: |
-          python -m research.solusdc_500_target_period
-      - name: Upload result and data coverage audit
+        run: python -m py_compile research/solusdc_500_complete_runner.py research/solusdc_500_target_period.py research/pullback_stage1.py
+      - name: Run full period SOLUSDC BASE vs A20 using archived and verified latest candles
+        run: python -m research.solusdc_500_complete_runner
+      - name: Upload results and data coverage audit
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: solusdc-500-20240104-20260919
+          name: solusdc-500-full-sep19-results
           path: results_solusdc_500_target_period/
-          if-no-files-found: warn
+          if-no-files-found: error
