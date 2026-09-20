@@ -1,0 +1,30 @@
+name: Four coin Turtle loss cycle research
+on:
+  push:
+    branches:
+      - research-four-coin-loss-cycles-20260920
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install packages
+        run: python -m pip install numpy pandas requests
+      - name: Check script syntax
+        run: python -m py_compile research/four_coin_loss_cycles.py research/pullback_stage1.py
+      - name: Analyze completed losing cycles
+        run: python -m research.four_coin_loss_cycles
+      - name: Upload research results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: four-coin-loss-cycle-2023-2026
+          path: results_four_coin_loss_cycles/
+          if-no-files-found: warn
