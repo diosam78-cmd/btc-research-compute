@@ -1,0 +1,33 @@
+name: Turtle two-tier profit taking with reentry research
+on:
+  push:
+    branches:
+      - research-add-risk-budget-20260920
+    paths:
+      - research/partial_reentry_stage6.py
+      - .github/workflows/partial_reentry_stage6.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Dependencies
+        run: python -m pip install numpy pandas requests
+      - name: Syntax and scenario baseline
+        run: python -m py_compile research/partial_reentry_stage6.py research/pullback_stage1.py
+      - name: Full independent wallet backtests
+        run: python -m research.partial_reentry_stage6
+      - name: Save results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: turtle-partial-reentry-stage6-screen
+          path: results_partial_reentry/
+          if-no-files-found: warn
