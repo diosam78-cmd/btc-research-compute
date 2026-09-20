@@ -1,0 +1,27 @@
+name: Turtle winning-cycle moving-average source OHLC export
+on:
+  push:
+    branches: [research-add-risk-budget-20260920]
+    paths:
+      - 'research/ma_winner_price_export_20260920.py'
+      - '.github/workflows/ma_winner_price_export_20260920.yml'
+  workflow_dispatch:
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install data dependencies
+        run: pip install numpy pandas requests
+      - name: Export and verify original Binance OHLC
+        run: python -m research.ma_winner_price_export_20260920
+      - name: Save verified research input
+        uses: actions/upload-artifact@v4
+        with:
+          name: original-four-coin-hourly-ohlc-moving-averages
+          path: results_ma_winner_prices_20260920/
+          retention-days: 90
