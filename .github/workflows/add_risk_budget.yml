@@ -1,0 +1,30 @@
+name: Turtle V5.2.11 additional-entry risk-budget A/B
+on:
+  push:
+    branches:
+      - research-add-risk-budget-20260920
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install research dependencies
+        run: python -m pip install numpy pandas requests
+      - name: Check study syntax
+        run: python -m py_compile research/add_risk_budget_study.py research/pullback_stage1.py
+      - name: Execute original baseline and six risk-budget scenarios
+        run: python -m research.add_risk_budget_study
+      - name: Upload baseline and risk-budget comparisons
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fourcoin-add-risk-budget-4-6-8
+          path: results_add_risk_budget/
+          if-no-files-found: warn
