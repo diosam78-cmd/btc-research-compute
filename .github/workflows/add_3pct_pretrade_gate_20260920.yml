@@ -1,0 +1,30 @@
+name: Turtle research deferred ADD at plus 3 percent ROI
+on:
+  push:
+    branches:
+      - research-add-3pct-pretrade-gate-20260920
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install research dependencies
+        run: python -m pip install numpy pandas requests
+      - name: Check isolated instrumentation syntax
+        run: python -m py_compile research/add_3pct_gate_study_20260920.py research/pullback_stage1.py
+      - name: Reproduce original four wallet baseline and fully replay 3pct delayed ADD
+        run: python -m research.add_3pct_gate_study_20260920
+      - name: Save backtest comparisons and detailed order audits
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fourcoin-3pct-deferred-add-study
+          path: results_add_3pct_gate/
+          if-no-files-found: warn
