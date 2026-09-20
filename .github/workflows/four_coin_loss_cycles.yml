@@ -1,4 +1,4 @@
-name: Four coin Turtle loss cycle research
+name: Four coin Turtle winner excursion research
 on:
   push:
     branches:
@@ -18,13 +18,13 @@ jobs:
       - name: Install packages
         run: python -m pip install numpy pandas requests
       - name: Check script syntax
-        run: python -m py_compile research/four_coin_loss_cycles.py research/pullback_stage1.py
-      - name: Analyze completed losing cycles
-        run: python -m research.four_coin_loss_cycles
+        run: python -m py_compile research/four_coin_profit_excursion_paths.py research/four_coin_loss_cycles.py research/pullback_stage1.py
+      - name: Analyze and verify all winning cycles
+        run: python -m research.four_coin_profit_excursion_paths
       - name: Upload research results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: four-coin-loss-cycle-2023-2026
-          path: results_four_coin_loss_cycles/
+          name: four-coin-winning-excursions-2023-2026
+          path: results_four_coin_profit_excursions/
           if-no-files-found: warn
