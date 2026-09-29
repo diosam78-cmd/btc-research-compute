@@ -41,4 +41,4 @@ python -m pip install -e ".[dev]"
 python -m pytest
 ```
 
-CI runs on GitHub-hosted Linux runners and uploads no research artifacts.
+Legacy GitHub Actions workflows, run logs, and artifacts were removed on 2026-09-29 at the owner's request. There is currently no CI workflow configured. The research engine and synthetic tests remain available for local use. Future Actions jobs should be configured as explicit manual batches when needed.
